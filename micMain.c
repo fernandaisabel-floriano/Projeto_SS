@@ -17,13 +17,9 @@
  * 
  *  
  * Bibliography: 
-
  *      https://docs.espressif.com/projects/esp-idf/en/latest/eidf_component_register(SRCS "micMain.c"
                        INCLUDE_DIRS "."
                        REQUIRES esp_adc esp_driver_gpio)sp32/api-reference/peripherals/adc/index.html
-=======
- *      https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/adc/index.html
-
  *      https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/adc/adc_continuous.html 
  *      https://docs.espressif.com/projects/esp-dsp/en/latest/esp32/esp-dsp-library.html      
  * 
@@ -55,30 +51,12 @@
 #include "esp_adc/adc_continuous.h" // For ESP ADC
 #include "esp_dsp.h"                // For ESP DSP functions, conv in the case
 #include "esp_private/esp_clk.h"    // For ESP clock functions
-
+#include "stateMachine.h"
 /* ********************************
  * Global defines 
  **********************************/
 #define LED GPIO_NUM_11
 #define MICEX_ADC_UNIT                    ADC_UNIT_1
-
-#include "sdkconfig.h"
-#include "esp_log.h"
-#include "freertos/FreeRTOS.h"      // FreeRTOS includes
-#include "freertos/task.h"
-#include "freertos/semphr.h"
-#include "freertos/queue.h"
-#include "esp_adc/adc_continuous.h" // For ESP ADC
-#include "esp_dsp.h"                // For ESP DSP functions, conv in the case
-#include "esp_private/esp_clk.h"    // For ESP clock functions
-#include "esp_private/esp_clk.h"    // For ESP clock functions
-#include "stateMachine.h"           // <-- ADICIONE ESTA LINHA AQUI!
-
-/* ********************************
- * Global defines 
- **********************************/
-#define MICEX_ADC_UNIT                     ADC_UNIT_1
-
 #define MICEX_ADC_CONV_MODE               ADC_CONV_SINGLE_UNIT_1
 #define MICEX_ADC_ATTEN                   ADC_ATTEN_DB_2_5            // Use Vref/0.75, 1.3 ... 1.5 V
 #define MICEX_ADC_BIT_WIDTH               SOC_ADC_DIGI_MAX_BITWIDTH   // 12 bits resolution (maximum)
@@ -95,18 +73,18 @@
                                               
 #define MAX_FILT_IR_LEN                 200     /* Maximum IR filter length */
 
+
+
 /* Global variable declarations */
 static adc_channel_t channel[1] = {ADC_CHANNEL_3};  // Mic on ADC channel 3
 static TaskHandle_t s_task_handle;
+static States actualState = ST0_WAIT;
 
 static const char *TAG = "MIC_EXAMPLE";
 
 /* ADC - Variables to hold data acquisition and parsing */
 __attribute__((aligned(16))) uint8_t result[MICEX_ADC_FRAME_SIZE] = {0}; // Buffer where the results of a continuous read are placed   
 __attribute__((aligned(16))) adc_continuous_data_t parsed_data[MICEX_ADC_FRAME_SIZE / SOC_ADC_DIGI_RESULT_BYTES]; // Buffer where frame parsed data is placed 
-volatile float volume1 = 0;
-volatile float volume2 = 0;
-volatile float volume3 = 0;
 
 /* FreeRTOS tasks and IPC */
 #define PROCESSOR_TASK_STACK_SIZE       8192            // Accomodate calls to dsp functions, log, user vars, ...
@@ -220,8 +198,28 @@ __attribute__((aligned(16))) float h3[] = {0.000040659, 0.000552708, 0.000601192
  /* Callback of ADC driver. Executed whenever a new frame is available */
 static bool s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data);
 /* Task called to process one full buffer of data. A queue + blocking read is used for synchronization and data passing */
+static void pv_processor_task(void *pvParam);
+/*************************************************************************************
+*   Timers e callbacks
+*************************************************************************************/
+gptimer_handle_t T1 = NULL;
+gptimer_handle_t T2 = NULL;
 
-     void pv_processor_task(void *pvParam);
+static bool timer_isr_callback1(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data) {
+    
+    estado_led = !estado_led;
+    gpio_set_level(LED, estado_led);
+
+    return false;
+};
+static bool timer_isr_callback2(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data) {
+    gptimer_stop(T2);
+    gptimer_stop(T1);
+    return false;
+}
+
+
+
 
 
 /******************************************************************* 
@@ -321,23 +319,22 @@ void pv_processor_task(void *pvParam)
 {
     /* Local vars, for auxiliary computations */           
     float * sound_samp_buf_proc;       // Buffer to hold sound samples. Buffers are float because conv() function requires float parameters - avoid conversions     
+    
     float * sinal_filtrado1;
     float * sinal_filtrado2;
     float * sinal_filtrado3;
-
-
-    float volume1 = 0;
-    float volume2 = 0; 
-    float volume3 = 0;
-
-
-
-    sound_samp_buf_proc = heap_caps_malloc(sizeof(float) * MICEX_SOUND_SAMPLES_BUF_SIZE, MALLOC_CAP_DMA);   
-
     sinal_filtrado1 = heap_caps_malloc(sizeof(float) * MICEX_SOUND_SAMPLES_BUF_SIZE, MALLOC_CAP_DMA); 
     sinal_filtrado2 = heap_caps_malloc(sizeof(float) * MICEX_SOUND_SAMPLES_BUF_SIZE, MALLOC_CAP_DMA); 
     sinal_filtrado3 = heap_caps_malloc(sizeof(float) * MICEX_SOUND_SAMPLES_BUF_SIZE, MALLOC_CAP_DMA); 
+    
+    float volume1;
+    float volume2;
+    float volume3;
 
+    /* Variable inits */
+    sound_samp_buf_proc = heap_caps_malloc(sizeof(float) * MICEX_SOUND_SAMPLES_BUF_SIZE, MALLOC_CAP_DMA);   
+
+    
     int lenght_FIR  = sizeof(h1)/sizeof(float);
 
     /* Infinite processing loop */
@@ -346,32 +343,122 @@ void pv_processor_task(void *pvParam)
         xQueueReceive(XQ,(void *)sound_samp_buf_proc,portMAX_DELAY); // Reads a sound sample. Blocks if queue is empty.
         ESP_LOGV(TAG, "Process Task got a buffer!");
      
-
-
-            float media = 0;
-        for (int i = 0; i < MICEX_SOUND_SAMPLES_BUF_SIZE; i++) {
-            media += sound_samp_buf_proc[i];
-        }
-        media = media / MICEX_SOUND_SAMPLES_BUF_SIZE; // Calcula a média (o valor do muro)
-
-        for (int i = 0; i < MICEX_SOUND_SAMPLES_BUF_SIZE; i++) {
-            sound_samp_buf_proc[i] -= media; // Remove o muro de todos os pontos!
-
-        }
-
         dsps_conv_f32(sound_samp_buf_proc,MICEX_SOUND_SAMPLES_BUF_SIZE,h1,lenght_FIR,sinal_filtrado1);
         dsps_conv_f32(sound_samp_buf_proc,MICEX_SOUND_SAMPLES_BUF_SIZE,h2,lenght_FIR,sinal_filtrado2);
         dsps_conv_f32(sound_samp_buf_proc,MICEX_SOUND_SAMPLES_BUF_SIZE,h3,lenght_FIR,sinal_filtrado3);
 
+        volume1 = 0;
+        volume2 = 0;
+        volume3 = 0;
 
         for (int i = 0; i < MICEX_SOUND_SAMPLES_BUF_SIZE; i++) {
             volume1 += sinal_filtrado1[i] * sinal_filtrado1[i];
             volume2 += sinal_filtrado2[i] * sinal_filtrado2[i];
             volume3 += sinal_filtrado3[i] * sinal_filtrado3[i];
         }
+    }
+    static int num_lidos = 0;
+    static int sequencia[4]= {-1,-1,-1,-1};
+    static int estado_led = 0;
+    const int PASSWORD_OPEN[4] = {1, 0, 1, 2};
+    const int PASSWORD_FECHAR[4] = {0, 0, 1, 2};
+    
+    timerConfig();
+    ledconfig();
 
-        main_estados();
+    switch (actualState){
+        /*detecta se existe */
+        case ST0_WAIT:
+            
+            if(num_lidos <= 3 && silencio == 0){
+            float vtotal = volume1+volume2+volume3;
+            printf("VT: %.1f V1: %.1f | V2: %.1f | V3: %.1f s:%d \n",vtotal, volume1, volume2, volume3,silencio);
+            printf("nemeros adicionados %d /4 \n",num_lidos);   
+                son_detectado = -1;
+                /*Identifica o som*/
+                if (volume1 > 1000)
+                {
+                      
+                    sequencia[num_lidos] = 0;
+                    son_detectado = 0;
+                    vTaskDelay(100 / portTICK_PERIOD_MS);
+                }
+                else if (volume2 > 1000)
+                {
+                    sequencia[num_lidos] = 1;
+                    son_detectado = 1;
+                    vTaskDelay(100 / portTICK_PERIOD_MS);
+                }
+                else if (volume3 > 1000){
+                    sequencia[num_lidos] = 2;
+                    son_detectado = 2;
+                    vTaskDelay(100 / portTICK_PERIOD_MS);
+                }
 
+                if(son_detectado != -1){
+                    num_lidos++;
+                }
+                
+                /*enquanto houver son + ruido não passa pra frente, é preciso um pequeno tempo de silencio para adicionar outra */
+                if(vtotal > 1000){
+                    silencio = 1; 
+                    vTaskDelay(100 / portTICK_PERIOD_MS);
+                }
+                else{
+                    silencio = 0;
+                    vTaskDelay(100 / portTICK_PERIOD_MS);
+                }
+
+            }
+            actualState = ST1_VALIDATE;
+            break;
+
+            /*compara a sequencia criada e as PASSWORDs e troca de estado de acordo*/
+        case ST1_VALIDATE:
+            cmp[0] = memcmp(sequencia,PASSWORD_OPEN,sizeof(sequencia));
+            cmp[1] = memcmp(sequencia,PASSWORD_FECHAR,sizeof(sequencia));
+            if (cmp[0] == 0)
+            {
+                actualState = ST2_OPEN;
+            }
+            else if (cmp[1] == 0)
+            {
+                actualState = ST3_CLOSE;
+            }
+            else
+            {
+                actualState = ST4_ERR;
+            }
+            /*reseta a sequencia, as comparações e o nº de valores lidos*/
+            memset((void*)sequencia, 0, sizeof(sequencia));
+            cmp[0] = 0;
+            cmp[1] = 0;
+            num_lidos = 0;
+            break;
+
+        case ST2_OPEN:
+            estado_led = 1;
+            gpio_set_level(LED, estado_led);
+            actualState = ST0_WAIT;
+            break;
+
+        case ST3_CLOSE:
+            estado_led = 0;
+            gpio_set_level(LED,estado_led);
+            actualState = ST0_WAIT;
+            break;
+
+        case ST4_ERR:
+            ESP_ERROR_CHECK(gptimer_start(T1));
+            ESP_ERROR_CHECK(gptimer_start(T2));
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+            actualState = ST0_WAIT;
+            break;
+
+        default:
+            break;
+        }
+        vTaskDelay(100 / portTICK_PERIOD_MS);
     }
 }
 
@@ -417,4 +504,52 @@ static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc
     ESP_ERROR_CHECK(adc_continuous_config(handle, &dig_cfg));
 
     *out_handle = handle;
+}
+
+/*
+* Configuração dos timers e leds
+*/
+void timerConfig(){
+    gptimer_config_t Timer_config = {
+    .clk_src = GPTIMER_CLK_SRC_DEFAULT, // Select the default clock source
+    .direction = GPTIMER_COUNT_UP,      // Counting direction is up
+    .resolution_hz = 20000   // Resolution is 20 kHz, i.e., 1 tick equals 50 microsecond
+    };
+    ESP_ERROR_CHECK(gptimer_new_timer(&Timer_config, &T1));
+    ESP_ERROR_CHECK(gptimer_new_timer(&Timer_config, &T2));
+
+    gptimer_event_callbacks_t cbs1 = {
+        .on_alarm = timer_isr_callback1, 
+    };
+
+    gptimer_event_callbacks_t cbs2 = {
+        .on_alarm = timer_isr_callback2,
+    };
+
+
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(T1, &cbs1, NULL));
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(T2, &cbs2, NULL));
+
+    gptimer_alarm_config_t alarm_config1 = {
+        .alarm_count = 5000,             // O alarme dispara a cada 0.25 segundo.
+        .reload_count = 0,                  // Contagem recomeça no tique 0.
+        .flags.auto_reload_on_alarm = true, // Recomeça contagem automaticamente após alarme.
+    };
+    gptimer_alarm_config_t alarm_config2 = {
+        .alarm_count = 100000,              // O alarme dispara depois de 5 segundos.
+        .reload_count = 0,                   // reseta o contador
+        .flags.auto_reload_on_alarm = false, // Recomeça contagem automaticamente após alarme.
+    };
+
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(T1, &alarm_config1));
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(T2, &alarm_config2));
+
+    ESP_ERROR_CHECK(gptimer_enable(T1));
+    ESP_ERROR_CHECK(gptimer_enable(T2));
+}
+
+void ledconfig(){
+    gpio_reset_pin(LED);
+    gpio_set_direction(LED, GPIO_MODE_OUTPUT);
+    gpio_set_level(LED,0);
 }
