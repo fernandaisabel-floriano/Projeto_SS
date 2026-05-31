@@ -17,7 +17,9 @@
  * 
  *  
  * Bibliography: 
- *      https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/adc/index.html
+ *      https://docs.espressif.com/projects/esp-idf/en/latest/eidf_component_register(SRCS "micMain.c"
+                       INCLUDE_DIRS "."
+                       REQUIRES esp_adc esp_driver_gpio)sp32/api-reference/peripherals/adc/index.html
  *      https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/adc/adc_continuous.html 
  *      https://docs.espressif.com/projects/esp-dsp/en/latest/esp32/esp-dsp-library.html      
  * 
@@ -34,6 +36,12 @@
 #include <stdio.h>
 #include <math.h>
 
+#include "driver/gpio.h"
+
+
+#include "esp_heap_caps.h"
+#include "stateMachine.h"
+
 #include "sdkconfig.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"      // FreeRTOS includes
@@ -47,7 +55,8 @@
 /* ********************************
  * Global defines 
  **********************************/
-#define MICEX_ADC_UNIT                     ADC_UNIT_1
+#define LED GPIO_NUM_11
+#define MICEX_ADC_UNIT                    ADC_UNIT_1
 #define MICEX_ADC_CONV_MODE               ADC_CONV_SINGLE_UNIT_1
 #define MICEX_ADC_ATTEN                   ADC_ATTEN_DB_2_5            // Use Vref/0.75, 1.3 ... 1.5 V
 #define MICEX_ADC_BIT_WIDTH               SOC_ADC_DIGI_MAX_BITWIDTH   // 12 bits resolution (maximum)
@@ -73,9 +82,6 @@ static const char *TAG = "MIC_EXAMPLE";
 /* ADC - Variables to hold data acquisition and parsing */
 __attribute__((aligned(16))) uint8_t result[MICEX_ADC_FRAME_SIZE] = {0}; // Buffer where the results of a continuous read are placed   
 __attribute__((aligned(16))) adc_continuous_data_t parsed_data[MICEX_ADC_FRAME_SIZE / SOC_ADC_DIGI_RESULT_BYTES]; // Buffer where frame parsed data is placed 
-float volume1 = 0;
-float volume2 = 0;
-float volume3 = 0;
 
 /* FreeRTOS tasks and IPC */
 #define PROCESSOR_TASK_STACK_SIZE       8192            // Accomodate calls to dsp functions, log, user vars, ...
@@ -292,7 +298,9 @@ void pv_processor_task(void *pvParam)
     float * sinal_filtrado2;
     float * sinal_filtrado3;
 
-
+    float volume1;
+    float volume2;
+    float volume3;
     /* Variable inits */
     sound_samp_buf_proc = heap_caps_malloc(sizeof(float) * MICEX_SOUND_SAMPLES_BUF_SIZE, MALLOC_CAP_DMA);   
 
