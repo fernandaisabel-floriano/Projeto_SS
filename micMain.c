@@ -410,7 +410,7 @@ void pv_processor_task(void *pvParam)
                 }
 
             }
-            actualState = ST1_VALIDATE;
+            if(num_lidos > 3){actualState = ST1_VALIDATE;}
             break;
 
             /*compara a sequencia criada e as PASSWORDs e troca de estado de acordo*/
@@ -460,7 +460,7 @@ void pv_processor_task(void *pvParam)
         }
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
-}
+
 
 /* ADC Callback - called when one frame was acquired */
 static bool IRAM_ATTR s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data)
