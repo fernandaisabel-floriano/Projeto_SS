@@ -17,9 +17,13 @@
  * 
  *  
  * Bibliography: 
+
  *      https://docs.espressif.com/projects/esp-idf/en/latest/eidf_component_register(SRCS "micMain.c"
                        INCLUDE_DIRS "."
                        REQUIRES esp_adc esp_driver_gpio)sp32/api-reference/peripherals/adc/index.html
+=======
+ *      https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/adc/index.html
+
  *      https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/adc/adc_continuous.html 
  *      https://docs.espressif.com/projects/esp-dsp/en/latest/esp32/esp-dsp-library.html      
  * 
@@ -57,6 +61,24 @@
  **********************************/
 #define LED GPIO_NUM_11
 #define MICEX_ADC_UNIT                    ADC_UNIT_1
+
+#include "sdkconfig.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"      // FreeRTOS includes
+#include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "freertos/queue.h"
+#include "esp_adc/adc_continuous.h" // For ESP ADC
+#include "esp_dsp.h"                // For ESP DSP functions, conv in the case
+#include "esp_private/esp_clk.h"    // For ESP clock functions
+#include "esp_private/esp_clk.h"    // For ESP clock functions
+#include "stateMachine.h"           // <-- ADICIONE ESTA LINHA AQUI!
+
+/* ********************************
+ * Global defines 
+ **********************************/
+#define MICEX_ADC_UNIT                     ADC_UNIT_1
+
 #define MICEX_ADC_CONV_MODE               ADC_CONV_SINGLE_UNIT_1
 #define MICEX_ADC_ATTEN                   ADC_ATTEN_DB_2_5            // Use Vref/0.75, 1.3 ... 1.5 V
 #define MICEX_ADC_BIT_WIDTH               SOC_ADC_DIGI_MAX_BITWIDTH   // 12 bits resolution (maximum)
@@ -82,6 +104,9 @@ static const char *TAG = "MIC_EXAMPLE";
 /* ADC - Variables to hold data acquisition and parsing */
 __attribute__((aligned(16))) uint8_t result[MICEX_ADC_FRAME_SIZE] = {0}; // Buffer where the results of a continuous read are placed   
 __attribute__((aligned(16))) adc_continuous_data_t parsed_data[MICEX_ADC_FRAME_SIZE / SOC_ADC_DIGI_RESULT_BYTES]; // Buffer where frame parsed data is placed 
+volatile float volume1 = 0;
+volatile float volume2 = 0;
+volatile float volume3 = 0;
 
 /* FreeRTOS tasks and IPC */
 #define PROCESSOR_TASK_STACK_SIZE       8192            // Accomodate calls to dsp functions, log, user vars, ...
@@ -195,7 +220,9 @@ __attribute__((aligned(16))) float h3[] = {0.000040659, 0.000552708, 0.000601192
  /* Callback of ADC driver. Executed whenever a new frame is available */
 static bool s_conv_done_cb(adc_continuous_handle_t handle, const adc_continuous_evt_data_t *edata, void *user_data);
 /* Task called to process one full buffer of data. A queue + blocking read is used for synchronization and data passing */
-static void pv_processor_task(void *pvParam);
+
+     void pv_processor_task(void *pvParam);
+
 
 /******************************************************************* 
  * The main task 
@@ -298,10 +325,13 @@ void pv_processor_task(void *pvParam)
     float * sinal_filtrado2;
     float * sinal_filtrado3;
 
-    float volume1;
-    float volume2;
-    float volume3;
-    /* Variable inits */
+
+    float volume1 = 0;
+    float volume2 = 0; 
+    float volume3 = 0;
+
+
+
     sound_samp_buf_proc = heap_caps_malloc(sizeof(float) * MICEX_SOUND_SAMPLES_BUF_SIZE, MALLOC_CAP_DMA);   
 
     sinal_filtrado1 = heap_caps_malloc(sizeof(float) * MICEX_SOUND_SAMPLES_BUF_SIZE, MALLOC_CAP_DMA); 
@@ -316,19 +346,31 @@ void pv_processor_task(void *pvParam)
         xQueueReceive(XQ,(void *)sound_samp_buf_proc,portMAX_DELAY); // Reads a sound sample. Blocks if queue is empty.
         ESP_LOGV(TAG, "Process Task got a buffer!");
      
+
+
+            float media = 0;
+        for (int i = 0; i < MICEX_SOUND_SAMPLES_BUF_SIZE; i++) {
+            media += sound_samp_buf_proc[i];
+        }
+        media = media / MICEX_SOUND_SAMPLES_BUF_SIZE; // Calcula a média (o valor do muro)
+
+        for (int i = 0; i < MICEX_SOUND_SAMPLES_BUF_SIZE; i++) {
+            sound_samp_buf_proc[i] -= media; // Remove o muro de todos os pontos!
+
+        }
+
         dsps_conv_f32(sound_samp_buf_proc,MICEX_SOUND_SAMPLES_BUF_SIZE,h1,lenght_FIR,sinal_filtrado1);
         dsps_conv_f32(sound_samp_buf_proc,MICEX_SOUND_SAMPLES_BUF_SIZE,h2,lenght_FIR,sinal_filtrado2);
         dsps_conv_f32(sound_samp_buf_proc,MICEX_SOUND_SAMPLES_BUF_SIZE,h3,lenght_FIR,sinal_filtrado3);
 
-        volume1 = 0;
-        volume2 = 0;
-        volume3 = 0;
 
         for (int i = 0; i < MICEX_SOUND_SAMPLES_BUF_SIZE; i++) {
             volume1 += sinal_filtrado1[i] * sinal_filtrado1[i];
             volume2 += sinal_filtrado2[i] * sinal_filtrado2[i];
             volume3 += sinal_filtrado3[i] * sinal_filtrado3[i];
         }
+
+        main_estados();
 
     }
 }
