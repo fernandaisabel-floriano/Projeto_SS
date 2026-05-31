@@ -15,7 +15,6 @@ extern volatile float volume3;
 
 static States actualState = ST0_WAIT;
 
-static int num_lidos = 0;
 static int sequencia[4]= {-1,-1,-1,-1};
 static int estado_led = 0;
 static const int PASSWORD_OPEN[4] = {1, 0, 1, 2};
@@ -24,6 +23,7 @@ static const int PASSWORD_FECHAR[4] = {0, 0, 1, 2};
 /*tem que estar fora da main pra que a isr de T2 possa reconhecer os timers*/
 gptimer_handle_t T1 = NULL;
 gptimer_handle_t T2 = NULL;
+static volatile bool alarme = false;
 
 static bool timer_isr_callback1(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data) {
     
@@ -33,8 +33,7 @@ static bool timer_isr_callback1(gptimer_handle_t timer, const gptimer_alarm_even
     return false;
 };
 static bool timer_isr_callback2(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data) {
-    gptimer_stop(T2);
-    gptimer_stop(T1);
+   alarme = true;
     return false;
 }
 
@@ -84,40 +83,47 @@ void ledconfig(){
 }
 
 void main_estados(){
-
-    timerConfig();
-    ledconfig();
-    
+    static int num_lidos = 0;
     static int cmp[] = {0,0};
     static int son_detectado;
     static int silencio = 0;
+static bool inicio = false;
+    if (!inicio) {
+        timerConfig();
+        ledconfig();
+        inicio = true;
+    }
+   
+  
+    
     switch (actualState){
         /*detecta se existe */
         case ST0_WAIT:
-            
-            if(num_lidos <= 3 && silencio == 0){
+
             float vtotal = volume1+volume2+volume3;
+
             printf("VT: %.1f V1: %.1f | V2: %.1f | V3: %.1f s:%d \n",vtotal, volume1, volume2, volume3,silencio);
-            printf("nemeros adicionados %d /4 \n",num_lidos);   
+            printf("nemeros adicionados %d /4 \n",num_lidos); 
+
+            if(num_lidos < 4 && silencio == 0){
+
+              
                 son_detectado = -1;
                 /*Identifica o som*/
-                if (volume1 > 1000)
-                {
-                      
-                    sequencia[num_lidos] = 0;
+                if (volume1 > 10000000 && volume1>volume2 && volume1>volume3)
+                {   sequencia[num_lidos] = 0;
                     son_detectado = 0;
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
+                
                 }
-                else if (volume2 > 1000)
+                else if (volume2 > 10000000 && volume2 > volume1 && volume2 > volume3)
                 {
                     sequencia[num_lidos] = 1;
                     son_detectado = 1;
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
+                    
                 }
-                else if (volume3 > 1000){
+                else if (volume3 > 10000000 && volume3 > volume1 && volume3 > volume2){
                     sequencia[num_lidos] = 2;
                     son_detectado = 2;
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
                 }
 
                 if(son_detectado != -1){
@@ -125,17 +131,19 @@ void main_estados(){
                 }
                 
                 /*enquanto houver son + ruido não passa pra frente, é preciso um pequeno tempo de silencio para adicionar outra */
-                if(vtotal > 1000){
-                    silencio = 1; 
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
-                }
-                else{
-                    silencio = 0;
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
-                }
+                if(vtotal > 10000000){
+                silencio = 1; 
+            }
+            else{
+                silencio = 0;
+            }
 
             }
-            actualState = ST1_VALIDATE;
+
+            if (num_lidos == 4) {
+                actualState = ST1_VALIDATE;
+            }
+            
             break;
 
             /*compara a sequencia criada e as PASSWORDs e troca de estado de acordo*/
@@ -174,15 +182,29 @@ void main_estados(){
             break;
 
         case ST4_ERR:
+            printf("\n-------ERRO-------\n");
+            
+            alarme= false;
+            gptimer_set_raw_count(T1, 0); 
+            gptimer_set_raw_count(T2, 0);
             ESP_ERROR_CHECK(gptimer_start(T1));
             ESP_ERROR_CHECK(gptimer_start(T2));
-            vTaskDelay(100 / portTICK_PERIOD_MS);
+            
+            while(!alarme) {
+                vTaskDelay(pdMS_TO_TICKS(50)); 
+            }
+            
+            gptimer_stop(T1);
+            gptimer_stop(T2);
+            
+    
+            gpio_set_level(LED, estado_led);
             actualState = ST0_WAIT;
             break;
 
         default:
             break;
         }
-        vTaskDelay(100 / portTICK_PERIOD_MS);
+     
     }
 
