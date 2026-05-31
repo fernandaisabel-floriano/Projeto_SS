@@ -88,33 +88,42 @@ void main_estados(){
     ledconfig();
 
     int cmp[] = {0,0};
-
+    int son_detectado;
 while(1){    
     switch (actualState){
-
+        /*detecta se existe */
         case ST0_WAIT:
             while(num_lidos <= 3){
+                son_detectado = -1;
+                /*Identifica o som*/
                 if (volume1 > 1000)
                 {
                     sequencia[num_lidos] = 0;
-                    num_lidos++;
+                    son_detectado = 0;
                     vTaskDelay(100 / portTICK_PERIOD_MS);
                 }
                 else if (volume2 > 1000)
                 {
                     sequencia[num_lidos] = 1;
-                    num_lidos++;
+                    son_detectado = 1;
                     vTaskDelay(100 / portTICK_PERIOD_MS);
                 }
                 else if (volume3 > 1000){
                     sequencia[num_lidos] = 2;
-                    num_lidos++;
+                    son_detectado = 2;
+                    vTaskDelay(100 / portTICK_PERIOD_MS);
+                }
+                if(son_detectado != -1){num_lidos++;}
+                int vtotal = volume1+volume2+volume3;
+                /*enquanto houver son + ruido não passa pra frente, é preciso um pequeno tempo de silencio para adicionar outra */
+                while(vtotal > 1500){
                     vTaskDelay(100 / portTICK_PERIOD_MS);
                 }
             }
             actualState = ST1_VALIDATE;
             break;
 
+            /*compara a sequencia criada e as PASSWORDs e troca de estado de acordo*/
         case ST1_VALIDATE:
             cmp[0] = memcmp(sequencia,PASSWORD_OPEN,sizeof(sequencia));
             cmp[1] = memcmp(sequencia,PASSWORD_FECHAR,sizeof(sequencia));
@@ -130,6 +139,7 @@ while(1){
             {
                 actualState = ST4_ERR;
             }
+            /*reseta a sequencia, as comparações e o nº de valores lidos*/
             memset((void*)sequencia, 0, sizeof(sequencia));
             cmp[0] = 0;
             cmp[1] = 0;
