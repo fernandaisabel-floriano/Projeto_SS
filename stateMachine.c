@@ -15,9 +15,9 @@ extern float volume3;
 
 static States actualState = ST0_WAIT;
 
-volatile int num_lidos = 0;
-volatile int sequencia[4];
-volatile int estado_led = 0;
+static int num_lidos = 0;
+static int sequencia[4]= {-1,-1,-1,-1};
+static int estado_led = 0;
 static const int PASSWORD_OPEN[4] = {1, 0, 1, 2};
 static const int PASSWORD_FECHAR[4] = {0, 0, 1, 2};
 
@@ -86,7 +86,7 @@ void main_estados(){
 
     timerConfig();
     ledconfig();
-
+    
     int cmp[] = {0,0};
     int son_detectado;
 while(1){    
@@ -94,31 +94,36 @@ while(1){
         /*detecta se existe */
         case ST0_WAIT:
             while(num_lidos <= 3){
+                float vtotal = volume1+volume2+volume3;
+                printf("VT: %.1f V1: %.1f | V2: %.1f | V3: %.1f\n",vtotal, volume1, volume2, volume3);
+                printf("nemeros adicionados %d /4 \n",num_lidos);
                 son_detectado = -1;
                 /*Identifica o som*/
-                if (volume1 > 1000)
+                if (volume1/100 > 3000)
                 {
                     sequencia[num_lidos] = 0;
                     son_detectado = 0;
                     vTaskDelay(100 / portTICK_PERIOD_MS);
                 }
-                else if (volume2 > 1000)
+                else if (volume2/100 > 2000)
                 {
                     sequencia[num_lidos] = 1;
                     son_detectado = 1;
                     vTaskDelay(100 / portTICK_PERIOD_MS);
                 }
-                else if (volume3 > 1000){
+                else if (volume3/100 > 2000){
                     sequencia[num_lidos] = 2;
                     son_detectado = 2;
                     vTaskDelay(100 / portTICK_PERIOD_MS);
                 }
                 if(son_detectado != -1){num_lidos++;}
-                int vtotal = volume1+volume2+volume3;
+                
                 /*enquanto houver son + ruido não passa pra frente, é preciso um pequeno tempo de silencio para adicionar outra */
-                while(vtotal > 1500){
+                while(vtotal/100 > 3600){
+                    vtotal = volume1+volume2+volume3;
                     vTaskDelay(100 / portTICK_PERIOD_MS);
                 }
+                vTaskDelay(100 / portTICK_PERIOD_MS);
             }
             actualState = ST1_VALIDATE;
             break;
@@ -171,4 +176,3 @@ while(1){
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
 }
-
