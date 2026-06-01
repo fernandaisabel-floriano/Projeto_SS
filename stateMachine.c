@@ -3,27 +3,25 @@
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "esp_heap_caps.h"
 #include "driver/gptimer.h"
-
 #include "stateMachine.h"
+
 #define LED GPIO_NUM_11
 
-extern float volume1;
-extern float volume2;
-extern float volume3;
+extern volatile float volume1;
+extern volatile float volume2;
+extern volatile float volume3;
 
 static States actualState = ST0_WAIT;
 
-volatile int num_lidos = 0;
-volatile int sequencia[4];
-volatile int estado_led = 0;
+static int sequencia[4]= {-1,-1,-1,-1};
+static int estado_led = 0;
 static const int PASSWORD_OPEN[4] = {1, 0, 1, 2};
-static const int PASSWORD_FECHAR[4] = {0, 0, 1, 2};
+static const int PASSWORD_FECHAR[4] = {0, 1, 2,0};
+static bool portaAberta = false;
 
-/*tem que estar fora da main pra que a isr de T2 possa reconhecer os timers*/
 gptimer_handle_t T1 = NULL;
-gptimer_handle_t T2 = NULL;
+
 
 static bool timer_isr_callback1(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data) {
     
@@ -32,11 +30,7 @@ static bool timer_isr_callback1(gptimer_handle_t timer, const gptimer_alarm_even
 
     return false;
 };
-static bool timer_isr_callback2(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_data) {
-    gptimer_stop(T2);
-    gptimer_stop(T1);
-    return false;
-}
+
 
 void timerConfig(){
     gptimer_config_t Timer_config = {
@@ -45,130 +39,140 @@ void timerConfig(){
     .resolution_hz = 20000   // Resolution is 20 kHz, i.e., 1 tick equals 50 microsecond
     };
     ESP_ERROR_CHECK(gptimer_new_timer(&Timer_config, &T1));
-    ESP_ERROR_CHECK(gptimer_new_timer(&Timer_config, &T2));
+    
 
     gptimer_event_callbacks_t cbs1 = {
         .on_alarm = timer_isr_callback1, 
     };
 
-    gptimer_event_callbacks_t cbs2 = {
-        .on_alarm = timer_isr_callback2,
-    };
+   
 
 
     ESP_ERROR_CHECK(gptimer_register_event_callbacks(T1, &cbs1, NULL));
-    ESP_ERROR_CHECK(gptimer_register_event_callbacks(T2, &cbs2, NULL));
+   
 
     gptimer_alarm_config_t alarm_config1 = {
-        .alarm_count = 5000,             // O alarme dispara a cada 0.25 segundo.
-        .reload_count = 0,                  // Contagem recomeça no tique 0.
+        .alarm_count = 5000,             
+        .reload_count = 0,                  
         .flags.auto_reload_on_alarm = true, // Recomeça contagem automaticamente após alarme.
     };
-    gptimer_alarm_config_t alarm_config2 = {
-        .alarm_count = 100000,              // O alarme dispara depois de 5 segundos.
-        .reload_count = 0,                   // reseta o contador
-        .flags.auto_reload_on_alarm = false, // Recomeça contagem automaticamente após alarme.
-    };
+   
 
     ESP_ERROR_CHECK(gptimer_set_alarm_action(T1, &alarm_config1));
-    ESP_ERROR_CHECK(gptimer_set_alarm_action(T2, &alarm_config2));
-
+    
     ESP_ERROR_CHECK(gptimer_enable(T1));
-    ESP_ERROR_CHECK(gptimer_enable(T2));
+  
 }
 
+
+
+// função de configuração do led
 void ledconfig(){
     gpio_reset_pin(LED);
     gpio_set_direction(LED, GPIO_MODE_OUTPUT);
+    gpio_set_level(LED, 0);
 }
 
+// maquina de estados
 void main_estados(){
 
-    timerConfig();
-    ledconfig();
+    static int num_lidos = 0;
+    static int cmp[] = {0,0};
+    static int son_detectado;
+    static int silencio = 1;
+    static bool inicio = false;
 
-    int cmp[] = {0,0};
-    int son_detectado;
-while(1){    
+
+    if (!inicio) {
+        ledconfig();
+        timerConfig();
+        inicio = true;
+    }
+   
     switch (actualState){
-        /*detecta se existe */
+        
         case ST0_WAIT:
-            while(num_lidos <= 3){
-                son_detectado = -1;
-                /*Identifica o som*/
-                if (volume1 > 1000)
-                {
-                    sequencia[num_lidos] = 0;
-                    son_detectado = 0;
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
+        { 
+            float vtotal = volume1 + volume2 + volume3;
+            printf("VT: %.0f | V1: %.0f | V2: %.0f | V3: %.0f\n", vtotal, volume1, volume2, volume3);
+            
+            son_detectado = -1;
+            
+            /*Identifica o som*/
+           if(silencio == 1){
+                if (volume1 > 1000 && volume1 > volume2 && volume1 > volume3) son_detectado = 0;
+                else if (volume2 > 1000 && volume2 > volume1 && volume2 > volume3) son_detectado = 1;
+                else if (volume3 > 1000 && volume3 > volume1 && volume3 > volume2) son_detectado = 2;
+           }
+          
+                
+                // Se for um som válido (0, 1 ou 2) 
+                if (son_detectado != -1 && num_lidos < 4) {
+                    sequencia[num_lidos] = son_detectado;
+                    num_lidos++;
+                    printf("\n**********Símbolo %d detectado (%d/4)************\n\n", son_detectado, num_lidos);
+                    printf("Sequência atual: [%d, %d, %d, %d]\n\n", sequencia[0], sequencia[1],sequencia[2],sequencia[3]);
                 }
-                else if (volume2 > 1000)
-                {
-                    sequencia[num_lidos] = 1;
-                    son_detectado = 1;
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
-                }
-                else if (volume3 > 1000){
-                    sequencia[num_lidos] = 2;
-                    son_detectado = 2;
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
-                }
-                if(son_detectado != -1){num_lidos++;}
-                int vtotal = volume1+volume2+volume3;
-                /*enquanto houver son + ruido não passa pra frente, é preciso um pequeno tempo de silencio para adicionar outra */
-                while(vtotal > 1500){
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
-                }
-            }
-            actualState = ST1_VALIDATE;
-            break;
 
-            /*compara a sequencia criada e as PASSWORDs e troca de estado de acordo*/
+
+                if(vtotal > 25000){
+                    printf("\n barulho \n");
+                    silencio = 0;}
+                else{silencio = 1;}
+                    
+            if (num_lidos == 4) {
+                actualState = ST1_VALIDATE;
+            }
+            break;
+        }
+
         case ST1_VALIDATE:
-            cmp[0] = memcmp(sequencia,PASSWORD_OPEN,sizeof(sequencia));
-            cmp[1] = memcmp(sequencia,PASSWORD_FECHAR,sizeof(sequencia));
-            if (cmp[0] == 0)
-            {
-                actualState = ST2_OPEN;
-            }
-            else if (cmp[1] == 0)
-            {
-                actualState = ST3_CLOSE;
-            }
-            else
-            {
-                actualState = ST4_ERR;
-            }
-            /*reseta a sequencia, as comparações e o nº de valores lidos*/
-            memset((void*)sequencia, 0, sizeof(sequencia));
-            cmp[0] = 0;
-            cmp[1] = 0;
+            printf("\nVALIDATE\n");
+            cmp[0] = memcmp(sequencia, PASSWORD_OPEN, sizeof(PASSWORD_OPEN));
+            cmp[1] = memcmp(sequencia, PASSWORD_FECHAR, sizeof(PASSWORD_FECHAR));
+            
+            if (cmp[0] == 0) actualState = ST2_OPEN;
+            else if (cmp[1] == 0) actualState = ST3_CLOSE;
+            else actualState = ST4_ERR;
+            
+            memset((void*)sequencia, -1, sizeof(sequencia));
             num_lidos = 0;
+            
             break;
 
         case ST2_OPEN:
+            printf("\n PORTA ABERTA \n\n");
+            portaAberta = true;
             estado_led = 1;
             gpio_set_level(LED, estado_led);
             actualState = ST0_WAIT;
             break;
 
         case ST3_CLOSE:
+            printf("\n PORTA FECHADA \n\n");
+            portaAberta = false;
             estado_led = 0;
-            gpio_set_level(LED,estado_led);
+            gpio_set_level(LED, estado_led);
             actualState = ST0_WAIT;
             break;
 
         case ST4_ERR:
-            ESP_ERROR_CHECK(gptimer_start(T1));
-            ESP_ERROR_CHECK(gptimer_start(T2));
-            vTaskDelay(100 / portTICK_PERIOD_MS);
+            printf("\n !!! Sequência errada  !!!\n");     
+            gptimer_start(T1);   
+            vTaskDelay(pdMS_TO_TICKS(5000));
+            gptimer_stop(T1);
+            gptimer_set_raw_count(T1, 0); 
+
+            // para garantir q o Led não acenda se a porta estiver fechada
+            if (portaAberta == true) {
+                gpio_set_level(LED, 1);
+            } else {
+                gpio_set_level(LED, 0);
+            }
+           printf("********************************************\n");
             actualState = ST0_WAIT;
             break;
-
         default:
             break;
-        }
-        vTaskDelay(100 / portTICK_PERIOD_MS);
     }
 }
-
