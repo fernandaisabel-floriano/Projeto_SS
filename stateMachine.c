@@ -115,7 +115,7 @@ void main_estados(){
                 }
 
 
-                if(vtotal > 15000){
+                if(vtotal > 25000){
                     printf("\n barulho \n");
                     silencio = 0;}
                 else{silencio = 1;}
