@@ -326,7 +326,7 @@ void pv_processor_task(void *pvParam)
     float * sinal_filtrado3;
 
 
-   
+
 
 
     sound_samp_buf_proc = heap_caps_malloc(sizeof(float) * MICEX_SOUND_SAMPLES_BUF_SIZE, MALLOC_CAP_DMA);   
@@ -345,24 +345,15 @@ void pv_processor_task(void *pvParam)
      
 
 
-            float media = 0;
-        for (int i = 0; i < MICEX_SOUND_SAMPLES_BUF_SIZE; i++) {
-            media += sound_samp_buf_proc[i];
-        }
-        media = media / MICEX_SOUND_SAMPLES_BUF_SIZE; // Calcula a média (o valor do muro)
-
-        for (int i = 0; i < MICEX_SOUND_SAMPLES_BUF_SIZE; i++) {
-            sound_samp_buf_proc[i] -= media; // Remove o muro de todos os pontos!
-
-        }
+       
 
         dsps_conv_f32(sound_samp_buf_proc,MICEX_SOUND_SAMPLES_BUF_SIZE,h1,lenght_FIR,sinal_filtrado1);
         dsps_conv_f32(sound_samp_buf_proc,MICEX_SOUND_SAMPLES_BUF_SIZE,h2,lenght_FIR,sinal_filtrado2);
         dsps_conv_f32(sound_samp_buf_proc,MICEX_SOUND_SAMPLES_BUF_SIZE,h3,lenght_FIR,sinal_filtrado3);
 
-             volume1 = 0;
-     volume2 = 0; 
-     volume3 = 0;
+            volume1 = 0;
+            volume2 = 0; 
+            volume3 = 0;
 
 
         for (int i = 0; i < MICEX_SOUND_SAMPLES_BUF_SIZE; i++) {
@@ -419,4 +410,3 @@ static void continuous_adc_init(adc_channel_t *channel, uint8_t channel_num, adc
 
     *out_handle = handle;
 }
-// teste
