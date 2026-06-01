@@ -283,7 +283,7 @@ void app_main(void)
                         sound_samp_buf_ADC[sb_count] = (float) parsed_data[i].raw_data;                           
                         sb_count+=1;
                         if(sb_count == MICEX_SOUND_SAMPLES_BUF_SIZE) { // The sound buffer is full. Process it ... */
-                            ESP_LOGD(TAG, "sound buffer acquired. Time to process ...\n");                
+                            //ESP_LOGD(TAG, "sound buffer acquired. Time to process ...\n");                
                             xQueueSend(XQ,(void *)sound_samp_buf_ADC,0);     // Places the sound buffer in the queue. If the queue is full skip it (ticksTo Wait set to 0)
                                                                         // The consumer/processing task is automatically waked if blocked in the Queue
                             sb_count = 0;
@@ -361,7 +361,9 @@ void pv_processor_task(void *pvParam)
             volume2 += sinal_filtrado2[i] * sinal_filtrado2[i];
             volume3 += sinal_filtrado3[i] * sinal_filtrado3[i];
         }
-
+        volume1 = volume1/MICEX_SOUND_SAMPLES_BUF_SIZE;
+        volume2 = volume2/MICEX_SOUND_SAMPLES_BUF_SIZE;
+        volume3 = volume3/MICEX_SOUND_SAMPLES_BUF_SIZE;
         main_estados();
 
     }
